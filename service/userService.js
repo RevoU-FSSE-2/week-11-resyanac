@@ -2,10 +2,10 @@ const bcrypt = require('bcrypt')
 const jwt = require('jsonwebtoken')
 const { JWT_SIGN } = require('../config/jwt.js')
 const express = require('express');
-const router = express.Router();
 const { generateResetToken } = require("../middleware/uid.js");
 const { getResetPaswEmailContent } = require("../config/emailTemplate.js");
 const { sendEmail } = require("../middleware/emailservice.js");
+const { error } = require('express-openapi-validator');
 
 
 
@@ -142,6 +142,39 @@ const login = async (req, res) => {
   }
 };
 
+const refreshAccessToken = async (refreshToken) => {
+  if (!JWT_SIGN) throw new Error("JWT_SIGN is not defined");
+
+  const decodedRefreshToken = verify(refreshToken, JWT_SIGN);
+
+  if (
+    !decodedRefreshToken ||
+    !decodedRefreshToken.exp ||
+    typeof decodedRefreshToken.exp !== "number"
+  ) {
+    throw new error({
+      success: false,
+      status: 401,
+      message: "Refresh token is invalid or has expired. Please login again",
+    });
+  }
+
+  if (decodedRefreshToken.exp < Date.now() / 1000) {
+    throw new error({
+      success: false,
+      status: 401,
+      message: "Refresh token has expired. Please login again",
+    });
+  }
+
+  const accessToken = sign({ userId: decodedRefreshToken.userId }, JWT_SIGN, {
+    expiresIn: "10m",
+  });
+
+  return { success: true, message: { accessToken } };
+};
+
+
 const requestResetPassword = async (req, res) => {
 	const { username } = req.body;
 
@@ -209,5 +242,6 @@ module.exports = {
 	login,
 	logout,
   requestResetPassword,
-  resetPassword
+  resetPassword,
+  refreshAccessToken
 };
