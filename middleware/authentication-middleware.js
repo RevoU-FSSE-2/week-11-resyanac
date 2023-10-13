@@ -1,22 +1,25 @@
-const jwt = require('jsonwebtoken')
-const { JWT_SIGN } = require('../config/jwt.js')
+const jwt = require("jsonwebtoken");
+const { JWT_SIGN } = require("../config/jwt.js");
 
 const authenticationMiddleware = (req, res, next) => {
-  const authHeader = req.headers.authorization
-  
-  if (!authHeader) {
-    res.status(401).json({ error: 'Authentication Unauthorized' })
-  } else {
-    const token = authHeader.split(' ')[1]
-    
-    try {
-      const decodedToken = jwt.verify(token, JWT_SIGN)
-      console.log(decodedToken, 'decodedToken');
-      next()
-    } catch (error) {
-      res.status(400).json({ error: error.message })
-    }
-  } 
-}
-  
-module.exports = authenticationMiddleware
+	const accessToken = req.cookies.accessToken;
+
+	if (!accessToken) {
+		return res.status(401).json({ error: "Unauthorized" });
+	}
+
+	if (!JWT_SIGN) {
+		return res.status(404).json({ error: "No token available" });
+	}
+
+	jwt.verify(accessToken, JWT_SIGN, (error, user) => {
+		if (error) {
+			console.log("JWT verification Error", error);
+			return res.status(401).json({ error: "Refresh Token Invalid" });
+		}
+		req.user = user;
+		next();
+	});
+};
+
+module.exports = authenticationMiddleware;

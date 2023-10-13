@@ -1,6 +1,11 @@
 const bcrypt = require('bcrypt')
 const jwt = require('jsonwebtoken')
 const { JWT_SIGN } = require('../config/jwt.js')
+const express = require('express');
+const router = express.Router();
+const { generateResetToken } = require("../middleware/uid.js");
+const { getResetPaswEmailContent } = require("../config/emailTemplate.js");
+const { sendEmail } = require("../middleware/emailservice.js");
 
 
 
@@ -15,7 +20,7 @@ const getAllUsers = async (req, res) => {
    console.log(user);
    return user
   } catch (error) {
-    const standardError = new StandardError({
+    const standardError = new Error({
       message: error.message || 'Error while registering user',
       status: 500
     })
@@ -28,7 +33,7 @@ const getAllUsers = async (req, res) => {
 const register = async (req, res) => {
   const { username, password, role } = req.body;
   try {
-    const validRoles = ['reviewer', 'approver'];
+    const validRoles = ['reviewer', 'approver', 'admin'];
     const usernameValue = username.trim(' ');
     if (password.length < 8) {
     return res.status(400).json({
@@ -79,28 +84,130 @@ const register = async (req, res) => {
 
 // login
 const login = async (req, res) => {
-    const { username, password } = req.body
-    
-    const user = await req.db.collection('users').findOne({ username })
-    console.log(user);
-    const isPasswordCorrect = await bcrypt.compare(password, user.password)
+  const { username, password } = req.body;
 
-    if(user) {
-        if (isPasswordCorrect) {
-            const token = jwt.sign({ username: user.username, id: user._id, role: user.role}, JWT_SIGN)
-            res.status(200).json({
-                message: 'User successfully logged in',
-                data: token
-            })
-        } else {
-            res.status(401).json({ error: 'Password is incorrect' })
-        }
+  try {
+    const user = await req.db.collection('users').findOne({ username });
+    console.log(user); // For Debugging Purpose
+    const isPasswordCorrect = await bcrypt.compare(password, user.password);
+    
+    if (user) {
+      if (isPasswordCorrect) {
+        const accessToken = jwt.sign(
+          { username: user.username, id: user._id, role: user.role },
+          JWT_SIGN,
+          { expiresIn: '30s' }
+        );
+
+        const refreshToken = jwt.sign(
+          { username: user.username, id: user._id, role: user.role },
+          JWT_SIGN,
+          { expiresIn: '7d' }
+        );
+
+        const accessTokenExpiration = new Date(Date.now() + 30 * 1000); // 30 seconds from now
+  
+
+       console.log(accessToken); // For Debugging Purpose
+        res.cookie('accessToken', accessToken, {
+          httpOnly: true,
+          maxAge: 30 * 1000,
+              path: '/'
+        });
+
+        console.log(refreshToken); // For debugging purpose
+        res.cookie('refreshToken', refreshToken, {
+          httpOnly: true,
+          maxAge: 7 * 24 * 60 * 60 * 1000,
+            path: '/'
+        });
+
+        res.status(200).json({
+          message: 'Successfully Logged In',
+          data: {
+            accessToken,
+            refreshToken,
+            accessTokenExpiration,
+          },
+        });
+      } else {
+        res.status(401).json({ error: 'Password is incorrect' });
+      }
     } else {
-        res.status(401).json({ error: 'User not found'})
+      res.status(401).json({ error: 'User not found' });
     }
+  } catch (error) {
+    console.error('Internal server error:', error);
+    return res.status(500).json({ message: 'Internal Server error' });
+  }
+};
+
+const requestResetPassword = async (req, res) => {
+	const { username } = req.body;
+
+	try {
+		const user = await req.db.collection('users').findOne({ username });
+      
+        if (!user) {
+            return res.status(404).json({ message: "No Username Found" });
+        }
+        const token = generateResetToken();
+        await req.db.collection('users').updateOne(
+          {username},{ $set: { resetPasswordToken: token , resetPasswordExpires:Date.now() + 3600000} }
+        )
+        // user.resetPasswordToken = token;
+        // user.resetPasswordExpires = Date.now() + 3600000; // 19 : 10 + 60 = 20 : 10
+		const emailContent = getResetPaswEmailContent(token);
+
+		await sendEmail({
+			to: "test@email.com",
+			subject: "Reset Password",
+			html: emailContent,
+		});
+
+		res.status(200).json({ message: "Password reset link sent to email" });
+	} catch (error) {
+		console.error("Internal server error:", error);
+		return res.status(500).json({ messsage: "Internal Server error" });
+	}
+};
+
+const resetPassword = async (req, res) => {
+	const { token, newPassword } = req.body;
+
+	try {
+		const user = await req.db.collection('users').findOne({
+        resetPasswordToken: token,
+        resetPasswordExpires: { $gt: Date.now() },
+      });
+if (!user) {
+  return res
+    .status(400)
+    .json({ message: "Invalid or expired reset token" });
 }
+		const hashedPassword = await bcrypt.hash(newPassword, 8);
+		user.password = hashedPassword;
+		user.resetPasswordToken = undefined;
+		user.resetPasswordExpires = undefined;
+
+		res.status(200).json({ message: "Password successfully reset" });
+	} catch (error) {
+		console.error("Internal server error", error);
+		return res.status(500).json({ message: "Internal Server Error" });
+	}
+};
+
+const logout = async (req, res) => {
+    res.clearCookie('accessToken');
+    res.clearCookie('refreshToken');
+    res.status(200).json({ message: 'Successfully log out' });
+}
+
 module.exports = {
   getAllUsers,
-  register,
-  login
-}
+	register,
+	login,
+	logout,
+  requestResetPassword,
+  resetPassword
+};
